@@ -62,12 +62,12 @@
       <div class="view" *ngIf="state.activeTab === 'mapping'">
         <div class="mapping-grid">
           <section class="panel feature-list-panel">
-            <div class="panel-heading"><span>技术特征树</span><p-button label="新增特征" icon="pi pi-plus" size="small" [disabled]="!canEditMainData" (onClick)="service.addFeature()" /></div>
+            <div class="panel-heading"><span>技术特征树</span><span class="heading-actions"><p-button *ngIf="conflicts.length" [label]="'待确认冲突 ' + conflicts.length" icon="pi pi-exclamation-triangle" size="small" severity="warn" [outlined]="true" (onClick)="conflictDialog = true" /><p-button label="新增特征" icon="pi pi-plus" size="small" [disabled]="!canEditMainData" (onClick)="service.addFeature()" /></span></div>
             <div class="feature-tree">
-              <button *ngFor="let feature of claimFeatures; let i = index" type="button" class="feature-item" [class.selected]="feature.id === state.selectedFeatureId" [style.--depth]="feature.parentId ? 1 : 0" (click)="service.selectFeature(feature.id)">
+              <button *ngFor="let feature of claimFeatures; let i = index" type="button" class="feature-item" [class.selected]="feature.id === state.selectedFeatureId" [class.conflicted]="feature.conflict?.status === 'pending'" [style.--depth]="feature.parentId ? 1 : 0" (click)="service.selectFeature(feature.id)">
                 <span class="feature-index">{{ feature.label.split('·')[0].trim() }}</span>
-                <span><strong>{{ feature.label }}</strong><small>{{ feature.text || '尚未填写特征内容' }}</small></span>
-                <i class="pi pi-chevron-right"></i>
+                <span><strong>{{ feature.label }}<em *ngIf="feature.conflict?.status === 'pending'" class="conflict-badge" [class.remote]="feature.conflict?.side === 'remote'">{{ feature.conflict?.side === 'remote' ? '对方版本 · 待确认' : '本方版本 · 待确认' }}</em></strong><small>{{ feature.text || '尚未填写特征内容' }}</small></span>
+                <i class="pi" [class.pi-chevron-right]="feature.conflict?.status !== 'pending'" [class.pi-exclamation-triangle]="feature.conflict?.status === 'pending'" [class.conflict-icon]="feature.conflict?.status === 'pending'"></i>
               </button>
               <div *ngIf="!claimFeatures.length" class="empty-state">尚未拆分技术特征</div>
             </div>
@@ -253,4 +253,35 @@
     <p>{{ issue.detail }}</p>
   </div>
   <ng-template pTemplate="footer"><p-button label="关闭" (onClick)="closeIssue()" /></ng-template>
+</p-dialog>
+
+<p-dialog header="合并冲突待确认" [(visible)]="conflictDialog" [modal]="true" [style]="{ width: '820px' }">
+  <div class="dialog-body">
+    <p class="conflict-intro">双方在各自标签页中修改了同一特征的<strong>层级或依据</strong>且不一致，已保留两份副本。请确认保留哪一份；确认前两份副本都会保留，改动后需重新确认。</p>
+    <article class="conflict-group" *ngFor="let group of conflicts">
+      <header><i class="pi pi-exclamation-triangle"></i><strong>{{ group.localFeature.label }}</strong><span>冲突字段：{{ conflictFieldNames(group) }}</span></header>
+      <div class="conflict-cols">
+        <div class="conflict-col local">
+          <h4>本方版本<small>你在本机看到的修改</small></h4>
+          <dl>
+            <dt>层级</dt><dd>{{ featureParentLabel(group.localFeature) }}</dd>
+            <dt>依据</dt><dd><span *ngFor="let label of featureSupportLabels(group.localFeature)" class="support-chip">{{ label }}</span><em *ngIf="!group.localFeature.supportIds.length">无</em></dd>
+            <dt>特征正文</dt><dd>{{ group.localFeature.text || '（空）' }}</dd>
+          </dl>
+          <p-button label="保留本方版本" icon="pi pi-check" size="small" (onClick)="resolveConflict(group, 'local')" />
+        </div>
+        <div class="conflict-col remote">
+          <h4>对方版本<small>另一标签页保存的修改</small></h4>
+          <dl>
+            <dt>层级</dt><dd>{{ featureParentLabel(group.remoteFeature) }}</dd>
+            <dt>依据</dt><dd><span *ngFor="let label of featureSupportLabels(group.remoteFeature)" class="support-chip">{{ label }}</span><em *ngIf="!group.remoteFeature.supportIds.length">无</em></dd>
+            <dt>特征正文</dt><dd>{{ group.remoteFeature.text || '（空）' }}</dd>
+          </dl>
+          <p-button label="保留对方版本" icon="pi pi-check" severity="secondary" [outlined]="true" size="small" (onClick)="resolveConflict(group, 'remote')" />
+        </div>
+      </div>
+    </article>
+    <div *ngIf="!conflicts.length" class="empty-state">没有待确认的合并冲突。</div>
+  </div>
+  <ng-template pTemplate="footer"><p-button label="关闭" (onClick)="conflictDialog = false" /></ng-template>
 </p-dialog>

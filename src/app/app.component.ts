@@ -11,6 +11,7 @@ import { DialogModule } from 'primeng/dialog'
 import { TooltipModule } from 'primeng/tooltip'
 import { Subscription } from 'rxjs'
 import type { Annotation, Claim, Feature, Role, ValidationIssue, WorkbenchState } from './models'
+import type { ConflictGroup } from './merge'
 import { WorkbenchService } from './workbench.service'
 
 @Component({
@@ -30,6 +31,8 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   versionDialog = false
   versionName = ''
   activeIssue: ValidationIssue | null = null
+  conflicts: ConflictGroup[] = []
+  conflictDialog = false
   roleOptions: Array<{ label: string; value: Role }> = [
     { label: '代理人（可编辑主数据与本人批注）', value: 'author' },
     { label: '审查员（可编辑本人批注）', value: 'examiner' },
@@ -48,6 +51,7 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
     }))
     this.subscriptions.add(this.service.issues$.subscribe(issues => this.issues = issues))
     this.subscriptions.add(this.service.history$.subscribe(history => this.history = history))
+    this.subscriptions.add(this.service.conflicts$.subscribe(conflicts => this.conflicts = conflicts))
     window.addEventListener('keydown', this.handleKeyboard)
   }
 
@@ -153,6 +157,22 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   closeIssue(): void { this.activeIssue = null }
+
+  conflictFieldNames(group: ConflictGroup): string {
+    return group.fields.map(field => field === 'parentId' ? '层级（父级特征）' : '依据（支持段落）').join('、')
+  }
+
+  featureParentLabel(feature: Feature): string {
+    return feature.parentId ? this.featureLabel(feature.parentId) : '顶层特征'
+  }
+
+  featureSupportLabels(feature: Feature): string[] {
+    return feature.supportIds.map(id => this.paragraphLabel(id))
+  }
+
+  resolveConflict(group: ConflictGroup, keep: 'local' | 'remote'): void {
+    this.service.resolveConflict(group.id, keep)
+  }
 
   private syncVersions(): void {
     if (!this.state.versions.some(item => item.id === this.compareA)) this.compareA = this.state.versions[1]?.id || this.state.versions[0]?.id || ''

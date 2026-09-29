@@ -1,6 +1,7 @@
 import { Injectable, OnDestroy } from '@angular/core'
 import { BehaviorSubject, map, type Observable } from 'rxjs'
 import type { Annotation, Claim, ClaimVersion, Feature, Paragraph, Position, Role, ValidationIssue, WorkbenchState } from './models'
+import { clone, dataEquals, extractConflictGroups, mergeStates, type ConflictGroup } from './merge'
 
 const STORAGE_KEY = 'patent-claim-mapping-workbench-v1'
 const POSITION_KEY = 'patent-claim-mapping-position-v1'
@@ -33,10 +34,10 @@ function demoState(): WorkbenchState {
   return {
     claims: initialClaims, paragraphs: initialParagraphs, features: initialFeatures,
     annotations: initialAnnotations, orphanMappings: [], versions: [],
-    role: 'author', currentUserRole: 'author', selectedClaimId: 'claim-1', selectedFeatureId: 'feature-b', activeTab: 'mapping'
+    role: 'author', currentUserRole: 'author', selectedClaimId: 'claim-1', selectedFeatureId: 'feature-b', activeTab: 'mapping',
+    revision: 1
   }
 }
-function clone<T>(value: T): T { return structuredClone(value) }
 
 @Injectable({ providedIn: 'root' })
 export class WorkbenchService implements OnDestroy {
@@ -45,6 +46,9 @@ export class WorkbenchService implements OnDestroy {
   private readonly historySubject = new BehaviorSubject<{ past: number; future: number }>({ past: 0, future: 0 })
   private past: WorkbenchState[] = []
   private future: WorkbenchState[] = []
+  /** 本标签页上次同步时看到的修订号与基准状态（三路合并的 base） */
+  private baseRevision = this.initialState.revision
+  private baseState: WorkbenchState = clone(this.initialState)
 
   readonly state$ = this.stateSubject.asObservable()
   readonly history$ = this.historySubject.asObservable()
@@ -56,13 +60,29 @@ export class WorkbenchService implements OnDestroy {
   readonly selectedClaim$ = this.state$.pipe(map(state => state.claims.find(claim => claim.id === state.selectedClaimId) || state.claims[0]))
   readonly selectedFeature$ = this.state$.pipe(map(state => state.features.find(feature => feature.id === state.selectedFeatureId) || null))
   readonly issues$ = this.state$.pipe(map(state => this.validate(state)))
+  /** 待确认冲突组（双方对层级/依据的修改不一致，已保留两份副本） */
+  readonly conflicts$: Observable<ConflictGroup[]> = this.state$.pipe(map(state => extractConflictGroups(state)))
+
+  private readonly handleStorage = (event: StorageEvent): void => {
+    if (event.key !== STORAGE_KEY || !event.newValue) return
+    let remote: WorkbenchState
+    try { remote = JSON.parse(event.newValue) as WorkbenchState } catch { return }
+    if ((remote.revision ?? 0) <= this.baseRevision) return
+    this.adoptRemote(remote)
+  }
 
   constructor() {
-    if (typeof window !== 'undefined') window.addEventListener('beforeunload', () => this.savePosition())
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', () => this.savePosition())
+      window.addEventListener('storage', this.handleStorage)
+    }
   }
 
   ngOnDestroy(): void {
-    if (typeof window !== 'undefined') window.removeEventListener('beforeunload', () => this.savePosition())
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('beforeunload', () => this.savePosition())
+      window.removeEventListener('storage', this.handleStorage)
+    }
   }
 
   get snapshot(): WorkbenchState { return clone(this.stateSubject.value) }
@@ -249,7 +269,7 @@ export class WorkbenchService implements OnDestroy {
   }
 
   savePosition(): void {
-    if (typeof localStorage === 'undefined') return
+    if (typeof localStorage === 'undefined' || typeof window === 'undefined') return
     const state = this.stateSubject.value
     const position: Position = { tab: state.activeTab, claimId: state.selectedClaimId, featureId: state.selectedFeatureId, scrollY: window.scrollY }
     localStorage.setItem(POSITION_KEY, JSON.stringify(position))
@@ -282,6 +302,14 @@ export class WorkbenchService implements OnDestroy {
       if (!feature.text.trim()) issues.push({ id: `empty-${feature.id}`, severity: 'warning', type: 'empty-feature', featureId: feature.id, title: `${feature.label} 内容为空`, detail: '请补全技术特征文字，避免映射对象不明确。' })
       if (!feature.supportIds.length) issues.push({ id: `support-${feature.id}`, severity: 'error', type: 'missing-support', featureId: feature.id, title: `${feature.label} 缺少说明书依据`, detail: '至少为一个说明书段落建立支持映射。' })
       if (this.hasReferenceCycle(feature, state.features)) issues.push({ id: `cycle-${feature.id}`, severity: 'error', type: 'cycle', featureId: feature.id, title: `${feature.label} 存在循环引用`, detail: '特征层级或引用关系形成闭环，请移除其中一条关系。' })
+    }
+    for (const group of extractConflictGroups(state)) {
+      const fieldNames = group.fields.map(field => field === 'parentId' ? '层级' : '依据').join('、')
+      issues.push({
+        id: `conflict-${group.id}`, severity: 'warning', type: 'pending-conflict', featureId: group.originalId,
+        title: `特征存在待确认冲突：${group.localFeature.label}`,
+        detail: `双方对${fieldNames}的修改不一致，已保留本方与对方两份副本，请确认保留哪一份。`
+      })
     }
     state.orphanMappings.forEach(item => issues.push({ id: item.id, severity: 'warning', type: 'orphan-mapping', title: '存在待清理映射', detail: item.reason }))
     return issues
@@ -321,12 +349,97 @@ export class WorkbenchService implements OnDestroy {
   }
 
   private updateHistory(): void { this.historySubject.next({ past: this.past.length, future: this.future.length }) }
-  private saveState(): void { if (typeof localStorage !== 'undefined') localStorage.setItem(STORAGE_KEY, JSON.stringify(this.stateSubject.value)) }
+
+  /** 保存：带上本方看到的修订号；若对方已先保存（存储修订号更新），按修订号三路合并而不是整份盖掉 */
+  private saveState(): void {
+    if (typeof localStorage === 'undefined') return
+    const current = this.stateSubject.value
+    let stored: WorkbenchState | null = null
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      stored = raw ? JSON.parse(raw) as WorkbenchState : null
+    } catch { stored = null }
+
+    if (!stored) {
+      this.writeState({ ...current, revision: this.baseRevision + 1 })
+      return
+    }
+    const storedRevision = stored.revision ?? 0
+    if (storedRevision === this.baseRevision) {
+      // 本方看到的修订号与存储一致：正常保存
+      this.writeState({ ...current, revision: this.baseRevision + 1 })
+    } else if (storedRevision > this.baseRevision) {
+      // 落后于对方：合并后再写回，而不是用本方整份覆盖
+      this.adoptRemote(stored)
+    } else {
+      // 存储旧于本方基准（异常情况）：直接写回本方修订
+      this.writeState({ ...current, revision: this.baseRevision + 1 })
+    }
+  }
+
+  /** 采用对方已保存的状态：本方无数据改动则直接同步，有改动则三路合并 */
+  private adoptRemote(remote: WorkbenchState): void {
+    const local = this.stateSubject.value
+    const merged = mergeStates(this.baseState, local, remote)
+    if (dataEquals(merged, remote)) {
+      // 本方没有需要并入的数据改动：直接同步对方修订，不产生新写入，避免标签页间来回触发
+      this.baseRevision = remote.revision
+      this.baseState = clone(remote)
+      this.stateSubject.next(merged)
+      return
+    }
+    // 合并产生了新状态：撤销重做历史基于合并前的快照，恢复会盖掉合并结果，因此清空历史
+    this.past = []
+    this.future = []
+    this.updateHistory()
+    this.writeState({ ...merged, revision: remote.revision + 1 })
+  }
+
+  private writeState(state: WorkbenchState): void {
+    this.baseRevision = state.revision
+    this.baseState = clone(state)
+    this.stateSubject.next(state)
+    if (typeof localStorage !== 'undefined') localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+  }
+
+  /** 确认保留某一份冲突副本；保留对方时，把引用关系与批注改指到保留后的特征 */
+  resolveConflict(groupId: string, keep: 'local' | 'remote'): void {
+    this.commit(state => {
+      const localCopy = state.features.find(item => item.conflict?.id === groupId && item.conflict.side === 'local')
+      const remoteCopy = state.features.find(item => item.conflict?.id === groupId && item.conflict.side === 'remote')
+      if (!localCopy || !remoteCopy) return
+      if (keep === 'local') {
+        state.features = state.features.filter(item => item.id !== remoteCopy.id)
+        delete localCopy.conflict
+        if (state.selectedFeatureId === remoteCopy.id) state.selectedFeatureId = localCopy.id
+      } else {
+        const originalId = remoteCopy.conflict!.originalId
+        const wasRemoteSelected = state.selectedFeatureId === remoteCopy.id
+        state.features = state.features.filter(item => item.id !== localCopy.id)
+        remoteCopy.id = originalId
+        delete remoteCopy.conflict
+        if (wasRemoteSelected) state.selectedFeatureId = originalId
+      }
+    })
+  }
+
   private loadState(): WorkbenchState {
     if (typeof localStorage === 'undefined') return demoState()
     try {
       const stored = localStorage.getItem(STORAGE_KEY)
-      return stored ? { ...demoState(), ...JSON.parse(stored) } : demoState()
+      if (!stored) {
+        // 首次打开：写入起始修订号，后续保存都带上各自看到的修订号
+        const initial = demoState()
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(initial))
+        return initial
+      }
+      const parsed = JSON.parse(stored) as Partial<WorkbenchState>
+      const migrated: WorkbenchState = { ...demoState(), ...parsed, revision: parsed.revision ?? 1 }
+      if (parsed.revision == null) {
+        // 旧数据没有修订号：兼容接入，补一个起始修订号并持久化
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated))
+      }
+      return migrated
     } catch { return demoState() }
   }
 }
