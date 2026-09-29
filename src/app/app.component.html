@@ -1,0 +1,256 @@
+<a class="skip-link" href="#workbench">跳到主要内容</a>
+<div class="app-shell">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">权</span>
+      <div><strong>权利要求映射工作台</strong><small>Claim-to-Spec Traceability</small></div>
+    </div>
+    <div class="top-actions">
+      <span class="save-state">浏览器本地自动保存</span>
+      <p-button label="撤销" icon="pi pi-undo" severity="secondary" [outlined]="true" [disabled]="!history.past" (onClick)="service.undo()" pTooltip="Ctrl / ⌘ + Z"></p-button>
+      <p-button label="重做" icon="pi pi-redo" severity="secondary" [outlined]="true" [disabled]="!history.future" (onClick)="service.redo()" pTooltip="Ctrl / ⌘ + Shift + Z"></p-button>
+      <p-button label="保存版本" icon="pi pi-save" (onClick)="versionDialog = true" pTooltip="Ctrl / ⌘ + S"></p-button>
+    </div>
+  </header>
+
+  <main id="workbench" class="workbench">
+    <aside class="case-sidebar">
+      <section class="panel role-panel">
+        <label for="role">当前角色</label>
+        <p-select inputId="role" [options]="roleOptions" optionLabel="label" optionValue="value" [ngModel]="state.role" (ngModelChange)="service.setRole($event)" />
+        <p class="hint">{{ currentRoleLabel }}。批注权限按作者锁定。</p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading"><span>权利要求</span><p-badge [value]="state.claims.length" severity="secondary" /></div>
+        <button *ngFor="let claim of state.claims" type="button" class="claim-nav" [class.active]="claim.id === state.selectedClaimId" (click)="service.selectClaim(claim.id)">
+          <span class="claim-number">{{ claim.number }}</span>
+          <span><strong>{{ claim.title }}</strong><small>{{ claim.independent ? '独立权利要求' : '从属权利要求' }}</small></span>
+        </button>
+        <p-button label="录入新权利要求" icon="pi pi-plus" severity="secondary" [outlined]="true" [fluid]="true" [disabled]="!canEditMainData" (onClick)="service.addClaim()" />
+      </section>
+
+      <section class="panel issue-panel">
+        <div class="panel-heading"><span>校验提醒</span><span class="counts"><b class="error">{{ errorCount }} 错误</b><b class="warning">{{ warningCount }} 警告</b></span></div>
+        <button type="button" class="issue-item" *ngFor="let issue of issues" [class.error]="issue.severity === 'error'" (click)="locateIssue(issue)">
+          <i class="pi" [class.pi-times-circle]="issue.severity === 'error'" [class.pi-exclamation-triangle]="issue.severity === 'warning'"></i>
+          <span><strong>{{ issue.title }}</strong><small>{{ issue.detail }}</small></span>
+        </button>
+        <div *ngIf="!issues.length" class="empty-success"><i class="pi pi-check-circle"></i><span>未发现映射问题</span></div>
+      </section>
+
+      <section class="panel export-panel">
+        <span class="eyebrow">核对结果</span>
+        <p-button label="导出 JSON" icon="pi pi-download" [outlined]="true" (onClick)="exportFile('json')" />
+        <p-button label="导出 CSV" icon="pi pi-table" [outlined]="true" (onClick)="exportFile('csv')" />
+      </section>
+    </aside>
+
+    <section class="main-panel" *ngIf="selectedClaim as claim">
+      <div class="page-heading">
+        <div><span class="eyebrow">案件 CN-2026-0917</span><h1>{{ claim.title }}</h1><p>独立项与从属项在同一视图中完成拆解、引用和支持映射。</p></div>
+        <div class="status-stack"><span class="status-chip ready">本地草稿</span><span class="updated">所有编辑实时持久化</span></div>
+      </div>
+
+      <nav class="tabs" aria-label="工作台视图">
+        <button [class.active]="state.activeTab === 'mapping'" (click)="service.setTab('mapping')"><i class="pi pi-sitemap"></i>特征映射</button>
+        <button [class.active]="state.activeTab === 'claim'" (click)="service.setTab('claim')"><i class="pi pi-file-edit"></i>权利要求录入</button>
+        <button [class.active]="state.activeTab === 'compare'" (click)="service.setTab('compare')"><i class="pi pi-arrows-h"></i>版本比较</button>
+        <button [class.active]="state.activeTab === 'audit'" (click)="service.setTab('audit')"><i class="pi pi-check-square"></i>核对清单</button>
+      </nav>
+
+      <div class="view" *ngIf="state.activeTab === 'mapping'">
+        <div class="mapping-grid">
+          <section class="panel feature-list-panel">
+            <div class="panel-heading"><span>技术特征树</span><p-button label="新增特征" icon="pi pi-plus" size="small" [disabled]="!canEditMainData" (onClick)="service.addFeature()" /></div>
+            <div class="feature-tree">
+              <button *ngFor="let feature of claimFeatures; let i = index" type="button" class="feature-item" [class.selected]="feature.id === state.selectedFeatureId" [style.--depth]="feature.parentId ? 1 : 0" (click)="service.selectFeature(feature.id)">
+                <span class="feature-index">{{ feature.label.split('·')[0].trim() }}</span>
+                <span><strong>{{ feature.label }}</strong><small>{{ feature.text || '尚未填写特征内容' }}</small></span>
+                <i class="pi pi-chevron-right"></i>
+              </button>
+              <div *ngIf="!claimFeatures.length" class="empty-state">尚未拆分技术特征</div>
+            </div>
+          </section>
+
+          <section class="panel feature-editor" *ngIf="selectedFeature as feature; else noFeature">
+            <div class="feature-title-row">
+              <div><span class="eyebrow">当前技术特征</span><h2>{{ feature.label }}</h2></div>
+              <span class="owner-chip">负责角色：{{ ownerLabel(feature.ownerRole) }}</span>
+            </div>
+            <label>特征名称<input pInputText [value]="feature.label" (change)="updateFeatureField('label', $event)" [disabled]="!canEditMainData"></label>
+            <label>特征正文<textarea pTextarea rows="3" [value]="feature.text" (change)="updateFeatureField('text', $event)" [disabled]="!canEditMainData"></textarea></label>
+            <div class="form-row">
+              <label>父级特征
+                <select [value]="feature.parentId || ''" (change)="updateFeatureParent($event)" [disabled]="!canEditMainData">
+                  <option value="">无（顶层特征）</option>
+                  <option *ngFor="let candidate of claimFeatures" [value]="candidate.id" [disabled]="candidate.id === feature.id">{{ candidate.label }}</option>
+                </select>
+              </label>
+              <label>负责角色
+                <select [value]="feature.ownerRole" (change)="service.updateFeature(feature.id, { ownerRole: $any($event.target).value })" [disabled]="!canEditMainData">
+                  <option value="author">代理人</option><option value="examiner">审查员</option><option value="viewer">观察者</option>
+                </select>
+              </label>
+            </div>
+            <fieldset class="reference-fieldset">
+              <legend>引用其他特征（用于从属关系或部件回指）</legend>
+              <label class="check-row" *ngFor="let candidate of claimFeatures" [class.hidden]="candidate.id === feature.id">
+                <input type="checkbox" [checked]="feature.referenceIds.includes(candidate.id)" (change)="toggleReference(candidate.id, $any($event.target).checked)" [disabled]="!canEditMainData || candidate.id === feature.id">
+                <span>{{ candidate.label }} · {{ candidate.text }}</span>
+              </label>
+            </fieldset>
+            <div class="button-row"><p-button label="删除特征" icon="pi pi-trash" severity="danger" [outlined]="true" [disabled]="!canEditMainData" (onClick)="service.deleteFeature(feature.id)"></p-button></div>
+          </section>
+          <ng-template #noFeature><section class="panel empty-state large">请选择一个技术特征进行编辑。</section></ng-template>
+
+          <section class="panel support-panel">
+            <div class="panel-heading"><span>说明书支持依据</span><span class="heading-actions"><p-badge [value]="selectedFeature?.supportIds?.length || 0" severity="success" /><p-button label="新增段落" icon="pi pi-plus" size="small" [disabled]="!canEditMainData" (onClick)="service.addParagraph()" /></span></div>
+            <p class="hint">选择段落即建立映射；取消选择会移除映射。只有至少一个段落时可消除“缺少依据”。</p>
+            <article *ngFor="let paragraph of state.paragraphs" class="paragraph-card" [class.mapped]="selectedFeature && isMapped(selectedFeature, paragraph.id)">
+              <label>
+                <input type="checkbox" [checked]="selectedFeature && isMapped(selectedFeature, paragraph.id)" [disabled]="!selectedFeature || !canEditMainData" (change)="selectedFeature && service.toggleParagraphMapping(selectedFeature.id, paragraph.id)">
+                <span class="paragraph-label">{{ paragraph.section }}</span>
+              </label>
+              <div *ngIf="canEditMainData" class="paragraph-editor">
+                <input pInputText [value]="paragraph.section" aria-label="说明书段落编号" (change)="service.updateParagraph(paragraph.id, { section: $any($event.target).value })">
+                <textarea pTextarea rows="3" [value]="paragraph.text" aria-label="说明书段落正文" (change)="service.updateParagraph(paragraph.id, { text: $any($event.target).value })"></textarea>
+                <p-button label="删除段落" icon="pi pi-trash" severity="danger" [text]="true" size="small" (onClick)="service.deleteParagraph(paragraph.id)" />
+              </div>
+              <p *ngIf="!canEditMainData">{{ paragraph.text }}</p>
+            </article>
+          </section>
+        </div>
+
+        <div class="mapping-summary">
+          <div><span>特征覆盖</span><strong>{{ claimFeatures.length }}</strong></div>
+          <div><span>已建立依据</span><strong>{{ mappedFeatureCount }}</strong></div>
+          <div><span>待清理映射</span><strong>{{ state.orphanMappings.length }}</strong></div>
+          <div><span>批注总数</span><strong>{{ state.annotations.length }}</strong></div>
+        </div>
+
+        <section class="panel annotation-panel" *ngIf="selectedFeature as feature">
+          <div class="panel-heading"><span>特征批注</span><span class="permission-note"><i class="pi pi-lock"></i>仅可编辑本人批注</span></div>
+          <div class="annotation-list">
+            <article class="annotation" *ngFor="let annotation of featureAnnotations" [class.own]="isOwnAnnotation(annotation)">
+              <header><strong>{{ annotation.authorName }}</strong><time>{{ annotation.updatedAt | date:'MM-dd HH:mm' }}</time></header>
+              <textarea pTextarea [value]="annotation.text" [readonly]="!isOwnAnnotation(annotation)" (change)="updateAnnotation(annotation, $event)"></textarea>
+              <p-button *ngIf="isOwnAnnotation(annotation)" label="删除" icon="pi pi-trash" severity="danger" [text]="true" size="small" (onClick)="service.deleteAnnotation(annotation.id)"></p-button>
+            </article>
+            <div *ngIf="!featureAnnotations.length" class="empty-state">这个特征还没有批注。</div>
+          </div>
+          <div class="new-annotation">
+            <textarea pTextarea rows="2" placeholder="以{{ state.role === 'author' ? '代理人' : state.role === 'examiner' ? '审查员' : '观察者' }}身份补充批注…" [(ngModel)]="annotationDraft"></textarea>
+            <p-button label="添加批注" icon="pi pi-comment" [disabled]="!annotationDraft.trim()" (onClick)="addAnnotation()"></p-button>
+          </div>
+        </section>
+      </div>
+
+      <div class="view" *ngIf="state.activeTab === 'claim'">
+        <section class="panel claim-editor">
+          <div class="panel-heading"><span>权利要求正文</span><p-badge [value]="'第 ' + claim.number + ' 项'" /></div>
+          <div class="form-row title-fields">
+            <label>编号<input pInputText type="number" [value]="claim.number" (change)="updateClaimField('number', $event)" [disabled]="!canEditMainData"></label>
+            <label>名称<input pInputText [value]="claim.title" (change)="updateClaimField('title', $event)" [disabled]="!canEditMainData"></label>
+            <label class="check-row standalone"><input type="checkbox" [checked]="claim.independent" (change)="updateClaimField('independent', $event)" [disabled]="!canEditMainData">独立权利要求</label>
+          </div>
+          <label>正文<textarea pTextarea rows="12" [value]="claim.text" (change)="updateClaimField('text', $event)" [disabled]="!canEditMainData"></textarea></label>
+          <div class="edit-note"><i class="pi pi-info-circle"></i>特征拆分不会丢失原文。修改权利要求后，请重新检查特征覆盖和引用关系。</div>
+        </section>
+      </div>
+
+      <div class="view" *ngIf="state.activeTab === 'compare'">
+        <section class="panel compare-panel">
+          <div class="panel-heading"><span>权利要求版本比较</span><p-button label="保存当前版本" icon="pi pi-save" (onClick)="versionDialog = true" /></div>
+          <div class="compare-selects" *ngIf="state.versions.length >= 2; else needVersions">
+            <label>基准版本<p-select [options]="state.versions" optionLabel="name" optionValue="id" [(ngModel)]="compareA" /></label>
+            <label>目标版本<p-select [options]="state.versions" optionLabel="name" optionValue="id" [(ngModel)]="compareB" /></label>
+          </div>
+          <ng-template #needVersions><div class="empty-state large">至少保存两个版本后即可比较。</div></ng-template>
+          <div *ngIf="state.versions.length >= 2" class="diff-list">
+            <article *ngFor="let row of compareRows()" [class.changed]="row.changed">
+              <header><strong>{{ row.label }}</strong><span>{{ row.changed ? '有差异' : '未变化' }}</span></header>
+              <div class="diff-cols">
+                <div><small>基准</small><p>{{ row.before || '（未包含）' }}</p></div>
+                <div><small>目标</small><p>{{ row.after || '（未包含）' }}</p></div>
+              </div>
+            </article>
+          </div>
+          <div class="version-history" *ngIf="state.versions.length">
+            <h3>版本历史</h3>
+            <div class="version-row" *ngFor="let version of state.versions">
+              <span><strong>{{ version.name }}</strong><small>{{ version.createdAt | date:'yyyy-MM-dd HH:mm' }} · {{ version.features.length }} 个特征</small></span>
+              <p-button label="恢复此版" icon="pi pi-history" [outlined]="true" size="small" (onClick)="restoreVersion(version.id)" />
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="view" *ngIf="state.activeTab === 'audit'">
+        <section class="panel audit-panel">
+          <div class="panel-heading"><span>提交前核对清单</span><span class="status-chip" [class.ready]="!errorCount">{{ errorCount ? errorCount + ' 项待处理' : '校验通过' }}</span></div>
+          <div class="audit-item" *ngFor="let issue of issues; let i = index">
+            <span class="audit-index">{{ i + 1 }}</span>
+            <div><strong>{{ issue.title }}</strong><p>{{ issue.detail }}</p></div>
+            <p-button label="定位" icon="pi pi-arrow-right" [text]="true" (onClick)="locateIssue(issue)" />
+          </div>
+          <div *ngIf="!issues.length" class="empty-success large"><i class="pi pi-check-circle"></i><strong>所有权利要求均具备说明书支持且引用关系有效。</strong></div>
+          <div class="orphan-area" *ngIf="state.orphanMappings.length">
+            <h3>已删除特征遗留的映射</h3>
+            <div class="orphan-row" *ngFor="let orphan of state.orphanMappings"><span>{{ orphan.reason }} 对应 {{ paragraphLabel(orphan.paragraphId) }}</span><p-button label="清理" size="small" severity="warn" (onClick)="service.clearOrphan(orphan.id)" /></div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <aside class="inspector">
+      <section class="panel selected-summary" *ngIf="selectedFeature as feature; else noSelection">
+        <span class="eyebrow">映射状态</span>
+        <h3>{{ feature.label }}</h3>
+        <div class="score-ring" [class.complete]="feature.supportIds.length" [class.incomplete]="!feature.supportIds.length">
+          <strong>{{ feature.supportIds.length }}</strong><small>支持段落</small>
+        </div>
+        <dl>
+          <dt>父级</dt><dd>{{ feature.parentId ? featureLabel(feature.parentId) : '顶层特征' }}</dd>
+          <dt>引用</dt><dd>{{ feature.referenceIds.length }} 个特征</dd>
+          <dt>批注</dt><dd>{{ featureAnnotations.length }} 条</dd>
+        </dl>
+        <div class="quick-map">
+          <strong>支持映射</strong>
+          <span *ngFor="let id of feature.supportIds">{{ paragraphLabel(id) }}</span>
+          <em *ngIf="!feature.supportIds.length">尚未选择说明书段落</em>
+        </div>
+      </section>
+      <ng-template #noSelection><section class="panel empty-state">选择技术特征查看映射详情。</section></ng-template>
+      <section class="panel key-help">
+        <span class="eyebrow">键盘效率</span>
+        <div><kbd>Ctrl</kbd><span>+</span><kbd>Z</kbd><p>撤销</p></div>
+        <div><kbd>Ctrl</kbd><span>+</span><kbd>Shift</kbd><span>+</span><kbd>Z</kbd><p>重做</p></div>
+        <div><kbd>Ctrl</kbd><span>+</span><kbd>S</kbd><p>保存版本</p></div>
+      </section>
+      <section class="panel rule-card">
+        <i class="pi pi-shield"></i>
+        <div><strong>批注权限隔离</strong><p>当前用户不能修改其他角色创建的批注，输入框保持只读。</p></div>
+      </section>
+    </aside>
+  </main>
+</div>
+
+<p-dialog header="保存版本快照" [(visible)]="versionDialog" [modal]="true" [style]="{ width: '460px' }">
+  <div class="dialog-body">
+    <p>保存当前全部权利要求和技术特征，用于后续比较或恢复。</p>
+    <label>版本名称<input pInputText [(ngModel)]="versionName" placeholder="例如：答复审查意见前" (keyup.enter)="createVersion()"></label>
+  </div>
+  <ng-template pTemplate="footer">
+    <p-button label="取消" severity="secondary" [outlined]="true" (onClick)="versionDialog = false" />
+    <p-button label="保存快照" icon="pi pi-save" (onClick)="createVersion()" />
+  </ng-template>
+</p-dialog>
+
+<p-dialog [header]="activeIssue?.title || '校验详情'" [visible]="!!activeIssue" (visibleChange)="!$event && closeIssue()" [modal]="true" [style]="{ width: '520px' }">
+  <div class="dialog-body" *ngIf="activeIssue as issue">
+    <span class="status-chip" [class.ready]="issue.severity !== 'error'" [class.error-chip]="issue.severity === 'error'">{{ issue.severity === 'error' ? '必须修复' : '建议处理' }}</span>
+    <p>{{ issue.detail }}</p>
+  </div>
+  <ng-template pTemplate="footer"><p-button label="关闭" (onClick)="closeIssue()" /></ng-template>
+</p-dialog>

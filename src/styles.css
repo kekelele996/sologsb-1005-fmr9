@@ -1,0 +1,9 @@
+:root { font-family: Inter, "Noto Sans SC", "PingFang SC", sans-serif; color: #17211c; background: #edf1ee; font-synthesis: none; }
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; min-width: 320px; }
+button, input, textarea, select { font: inherit; }
+.skip-link { position: fixed; z-index: 9999; top: 8px; left: 8px; transform: translateY(-160%); padding: 10px 16px; border-radius: 8px; background: white; }
+.skip-link:focus { transform: translateY(0); }
+.p-button { font-weight: 700; }
+:focus-visible { outline: 3px solid #d97706 !important; outline-offset: 2px; }
