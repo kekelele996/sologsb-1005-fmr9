@@ -10,7 +10,7 @@ import { BadgeModule } from 'primeng/badge'
 import { DialogModule } from 'primeng/dialog'
 import { TooltipModule } from 'primeng/tooltip'
 import { Subscription } from 'rxjs'
-import type { Annotation, Claim, Feature, Role, ValidationIssue, WorkbenchState } from './models'
+import type { Annotation, Claim, ConflictCandidate, Feature, FeatureConflictField, PendingFeatureConflict, Role, ValidationIssue, WorkbenchState } from './models'
 import { WorkbenchService } from './workbench.service'
 
 @Component({
@@ -70,6 +70,36 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   get warningCount(): number { return this.issues.filter(item => item.severity === 'warning').length }
   get canEditMainData(): boolean { return this.state.role !== 'viewer' }
   get mappedFeatureCount(): number { return this.claimFeatures.filter(feature => feature.supportIds.length > 0).length }
+  get pendingConflictCount(): number {
+    return this.state.features.reduce((count, feature) => count + feature.conflicts.filter(item => item.status === 'pending').length, 0)
+  }
+
+  /** 当前特征上按层级 / 依据分组的合并冲突（待确认或已确认但仍保留） */
+  featureConflicts(feature: Feature): PendingFeatureConflict[] { return feature.conflicts }
+  hasPendingConflict(feature: Feature): boolean { return feature.conflicts.some(item => item.status === 'pending') }
+  conflictFieldLabel(field: FeatureConflictField): string { return field === 'parentId' ? '父级层级' : '说明书依据' }
+  conflictAuthor(candidate: ConflictCandidate): string {
+    if (candidate.authorRole === 'remote') return candidate.authorName
+    return candidate.authorName
+  }
+  /** 父级层级候选的显示文本 */
+  conflictParentLabel(candidate: ConflictCandidate): string {
+    const id = candidate.value as string | null
+    return id ? this.featureLabel(id) : '无（顶层特征）'
+  }
+  /** 说明书依据候选的显示文本 */
+  conflictSupportLabels(candidate: ConflictCandidate): string {
+    const ids = candidate.value as string[]
+    return ids.length ? ids.map(id => this.paragraphLabel(id)).join('；') : '（未选择段落）'
+  }
+  isCandidateActive(feature: Feature, conflict: PendingFeatureConflict, candidate: ConflictCandidate): boolean {
+    const current = conflict.field === 'parentId' ? feature.parentId : feature.supportIds
+    return JSON.stringify(current) === JSON.stringify(candidate.value)
+  }
+
+  resolveConflict(featureId: string, conflict: PendingFeatureConflict, candidate: ConflictCandidate): void {
+    this.service.resolveConflict(featureId, conflict.id, candidate.id)
+  }
 
   claimLabel(id: string): string { return this.state.claims.find(item => item.id === id)?.title || '未命名权利要求' }
   featureLabel(id: string): string { return this.state.features.find(item => item.id === id)?.label || id }

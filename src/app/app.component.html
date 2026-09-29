@@ -6,7 +6,7 @@
       <div><strong>权利要求映射工作台</strong><small>Claim-to-Spec Traceability</small></div>
     </div>
     <div class="top-actions">
-      <span class="save-state">浏览器本地自动保存</span>
+      <span class="save-state">本地按修订号合并保存 · 修订号 {{ state.revision }}<ng-container *ngIf="pendingConflictCount"> · <b class="conflict-count">{{ pendingConflictCount }} 处待确认</b></ng-container></span>
       <p-button label="撤销" icon="pi pi-undo" severity="secondary" [outlined]="true" [disabled]="!history.past" (onClick)="service.undo()" pTooltip="Ctrl / ⌘ + Z"></p-button>
       <p-button label="重做" icon="pi pi-redo" severity="secondary" [outlined]="true" [disabled]="!history.future" (onClick)="service.redo()" pTooltip="Ctrl / ⌘ + Shift + Z"></p-button>
       <p-button label="保存版本" icon="pi pi-save" (onClick)="versionDialog = true" pTooltip="Ctrl / ⌘ + S"></p-button>
@@ -64,9 +64,9 @@
           <section class="panel feature-list-panel">
             <div class="panel-heading"><span>技术特征树</span><p-button label="新增特征" icon="pi pi-plus" size="small" [disabled]="!canEditMainData" (onClick)="service.addFeature()" /></div>
             <div class="feature-tree">
-              <button *ngFor="let feature of claimFeatures; let i = index" type="button" class="feature-item" [class.selected]="feature.id === state.selectedFeatureId" [style.--depth]="feature.parentId ? 1 : 0" (click)="service.selectFeature(feature.id)">
+              <button *ngFor="let feature of claimFeatures; let i = index" type="button" class="feature-item" [class.selected]="feature.id === state.selectedFeatureId" [class.has-conflict]="hasPendingConflict(feature)" [style.--depth]="feature.parentId ? 1 : 0" (click)="service.selectFeature(feature.id)">
                 <span class="feature-index">{{ feature.label.split('·')[0].trim() }}</span>
-                <span><strong>{{ feature.label }}</strong><small>{{ feature.text || '尚未填写特征内容' }}</small></span>
+                <span><strong>{{ feature.label }}<i *ngIf="hasPendingConflict(feature)" class="pi pi-flag conflict-flag" title="层级或依据存在待确认冲突"></i></strong><small>{{ feature.text || '尚未填写特征内容' }}</small></span>
                 <i class="pi pi-chevron-right"></i>
               </button>
               <div *ngIf="!claimFeatures.length" class="empty-state">尚未拆分技术特征</div>
@@ -78,6 +78,23 @@
               <div><span class="eyebrow">当前技术特征</span><h2>{{ feature.label }}</h2></div>
               <span class="owner-chip">负责角色：{{ ownerLabel(feature.ownerRole) }}</span>
             </div>
+
+            <section class="conflict-box" *ngFor="let conflict of featureConflicts(feature)" [class.pending]="conflict.status === 'pending'" [class.confirmed]="conflict.status === 'confirmed'">
+              <header>
+                <strong><i class="pi" [class.pi-exclamation-circle]="conflict.status === 'pending'" [class.pi-check-circle]="conflict.status === 'confirmed'"></i>{{ conflictFieldLabel(conflict.field) }}存在两份取值</strong>
+                <span class="conflict-state">{{ conflict.status === 'pending' ? '待确认' : '已确认（再次改动后需重新确认）' }}</span>
+              </header>
+              <p class="conflict-explain">两个标签页同时修改了该特征的{{ conflictFieldLabel(conflict.field) }}，两边内容均已保留。请核对后采用其中一份；之后再改动{{ conflictFieldLabel(conflict.field) }}会重新进入待确认。</p>
+              <div class="conflict-candidates">
+                <article class="candidate" *ngFor="let candidate of conflict.candidates" [class.active]="isCandidateActive(feature, conflict, candidate)">
+                  <div class="candidate-meta"><b>{{ conflictAuthor(candidate) }}</b><time>{{ candidate.at | date:'MM-dd HH:mm' }}</time></div>
+                  <p class="candidate-value" *ngIf="conflict.field === 'parentId'">{{ conflictParentLabel(candidate) }}</p>
+                  <p class="candidate-value" *ngIf="conflict.field === 'supportIds'">{{ conflictSupportLabels(candidate) }}</p>
+                  <p-button label="采用此取值" icon="pi pi-check" size="small" [outlined]="!isCandidateActive(feature, conflict, candidate)" [disabled]="!canEditMainData || isCandidateActive(feature, conflict, candidate)" (onClick)="resolveConflict(feature.id, conflict, candidate)"></p-button>
+                </article>
+              </div>
+            </section>
+
             <label>特征名称<input pInputText [value]="feature.label" (change)="updateFeatureField('label', $event)" [disabled]="!canEditMainData"></label>
             <label>特征正文<textarea pTextarea rows="3" [value]="feature.text" (change)="updateFeatureField('text', $event)" [disabled]="!canEditMainData"></textarea></label>
             <div class="form-row">

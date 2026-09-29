@@ -14,6 +14,28 @@ export interface Paragraph {
   text: string
 }
 
+/** 层级或说明书依据发生合并冲突时涉及的特征字段 */
+export type FeatureConflictField = 'parentId' | 'supportIds'
+
+/** 冲突字段的一个候选取值（来自某个标签页的某位作者；remote 表示无法回溯具体作者的对端标签页） */
+export interface ConflictCandidate {
+  id: string
+  authorRole: Role | 'remote'
+  authorName: string
+  /** parentId 冲突时为 string | null；supportIds 冲突时为 string[] */
+  value: string | string[] | null
+  at: string
+}
+
+/** 同一特征的层级或依据被两边同时改动后留下的待确认记录 */
+export interface PendingFeatureConflict {
+  id: string
+  field: FeatureConflictField
+  /** pending：等待人工确认；confirmed：已显式采用某候选，之后该字段再被修改会重新待确认 */
+  status: 'pending' | 'confirmed'
+  candidates: ConflictCandidate[]
+}
+
 export interface Feature {
   id: string
   claimId: string
@@ -23,6 +45,8 @@ export interface Feature {
   referenceIds: string[]
   supportIds: string[]
   ownerRole: Role
+  /** 该特征上尚未消解的层级/依据合并冲突；旧数据没有该字段，载入时补空数组 */
+  conflicts: PendingFeatureConflict[]
 }
 
 export interface Annotation {
@@ -68,12 +92,14 @@ export interface WorkbenchState {
   selectedFeatureId: string | null
   activeTab: string
   currentUserRole: Role
+  /** 当前工作副本基于的共享数据修订号 */
+  revision: number
 }
 
 export interface ValidationIssue {
   id: string
   severity: 'error' | 'warning'
-  type: 'cycle' | 'missing-support' | 'orphan-mapping' | 'empty-feature'
+  type: 'cycle' | 'missing-support' | 'orphan-mapping' | 'empty-feature' | 'merge-conflict'
   featureId?: string
   title: string
   detail: string
